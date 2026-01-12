@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(node --version:*)",
+      "Bash(npm --version)",
+      "Bash(/opt/homebrew/bin/node --version)",
+      "Bash(/usr/local/bin/node:*)",
+      "Bash(npm install:*)",
+      "Bash(echo:*)",
+      "Bash(brew --version:*)",
+      "Bash(/opt/homebrew/bin/brew:*)",
+      "Bash(/usr/local/bin/brew --version)",
+      "Bash(export PATH=\"$HOME/.local/node/bin:$PATH\")",
+      "Bash(npm test:*)",
+      "Bash(git sparse-checkout:*)",
+      "Bash(tree:*)",
+      "Bash(npm run build:*)",
+      "Bash(/usr/local/bin/npm run build:*)",
+      "Bash(export PATH:*)",
+      "Bash(npm run dev:*)"
+    ]
+  }
+}
