@@ -51,6 +51,12 @@ interface YouTubePlayer {
   getCurrentTime: () => number;
   getDuration: () => number;
   destroy: () => void;
+  // Additional methods for ad detection
+  mute: () => void;
+  unMute: () => void;
+  isMuted: () => boolean;
+  getVideoData: () => { video_id?: string; title?: string };
+  getVideoUrl: () => string;
 }
 
 declare global {
@@ -80,6 +86,7 @@ declare global {
 }
 
 const STORAGE_KEY = 'musicscheduler_playlist';
+const SCHEDULES_STORAGE_KEY = 'musicscheduler_schedules';
 
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
@@ -140,12 +147,19 @@ export default function MusicScheduler() {
   const [duration, setDuration] = useState(0);
   const [isAddingUrl, setIsAddingUrl] = useState(false);
 
+  // Ad muting and skipping state
+  const [isAdMuted, setIsAdMuted] = useState(false);
+  const expectedVideoIdRef = useRef<string | null>(null);
+  const adSkipAttemptRef = useRef<number>(0); // Track skip attempts to avoid loops
+  const lastAdDetectedTimeRef = useRef<number>(0); // Debounce ad detection
+
   // Refs
   const audioRef = useRef<HTMLAudioElement>(null);
   const ytPlayerRef = useRef<YouTubePlayer | null>(null);
   const ytContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scheduleCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const playlistRef = useRef<Song[]>([]); // Keep current playlist in ref for schedule checker
 
   const activePlaylist = isShuffleEnabled ? shuffledPlaylist : playlist;
   const currentSong = currentSongIndex >= 0 && currentSongIndex < activePlaylist.length
@@ -166,14 +180,38 @@ export default function MusicScheduler() {
     }
   }, []);
 
-  // Save playlist to localStorage whenever it changes
+  // Save playlist to localStorage and keep ref in sync
   useEffect(() => {
+    playlistRef.current = playlist;
     if (playlist.length > 0) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(playlist));
     } else {
       localStorage.removeItem(STORAGE_KEY);
     }
   }, [playlist]);
+
+  // Load schedules from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(SCHEDULES_STORAGE_KEY);
+    if (saved) {
+      try {
+        const savedSchedules = JSON.parse(saved) as Schedule[];
+        // Reset isPlaying state on load
+        setSchedules(savedSchedules.map(s => ({ ...s, isPlaying: false })));
+      } catch (e) {
+        console.error('Failed to load schedules:', e);
+      }
+    }
+  }, []);
+
+  // Save schedules to localStorage whenever they change
+  useEffect(() => {
+    if (schedules.length > 0) {
+      localStorage.setItem(SCHEDULES_STORAGE_KEY, JSON.stringify(schedules));
+    } else {
+      localStorage.removeItem(SCHEDULES_STORAGE_KEY);
+    }
+  }, [schedules]);
 
   // Load YouTube IFrame API
   useEffect(() => {
@@ -207,7 +245,7 @@ export default function MusicScheduler() {
     };
   }, []);
 
-  // Track YouTube video progress
+  // Track YouTube video progress and detect ads
   useEffect(() => {
     if (!isPlaying || currentSong?.type !== 'youtube') return;
 
@@ -226,57 +264,157 @@ export default function MusicScheduler() {
       }
     };
 
-    // Poll every 500ms for YouTube progress
-    const interval = setInterval(updateYoutubeProgress, 500);
+    // Ad detection: Check if currently playing video matches expected video
+    const checkForAds = () => {
+      if (!ytPlayerRef.current || !expectedVideoIdRef.current) return;
+
+      try {
+        // Method 1: Check video data for mismatched video ID
+        const videoData = ytPlayerRef.current.getVideoData();
+        const currentVideoId = videoData?.video_id;
+
+        // Method 2: Check the video URL for ad indicators
+        const videoUrl = ytPlayerRef.current.getVideoUrl();
+        const isAdUrl = videoUrl?.includes('&ad_') || videoUrl?.includes('googlevideo.com');
+
+        // Method 3: Check if duration is suspiciously short (ads are typically < 30 seconds)
+        // But only use this if we've already loaded the expected video once
+        const currentDuration = ytPlayerRef.current.getDuration();
+        const isSuspiciouslyShort = currentDuration > 0 && currentDuration < 30;
+
+        // Determine if an ad is playing
+        const adDetected =
+          (currentVideoId && currentVideoId !== expectedVideoIdRef.current) ||
+          isAdUrl ||
+          (isSuspiciouslyShort && currentVideoId !== expectedVideoIdRef.current);
+
+        const now = Date.now();
+
+        if (adDetected && !isAdMuted) {
+          // Ad detected - mute the player immediately
+          ytPlayerRef.current.mute();
+          setIsAdMuted(true);
+          console.log('[Ad Handler] Ad detected, muting audio');
+
+          // Attempt to skip the ad by reloading the video
+          // Only try if we haven't attempted recently (debounce 3 seconds)
+          // and haven't exceeded max attempts (3 per song)
+          if (
+            now - lastAdDetectedTimeRef.current > 3000 &&
+            adSkipAttemptRef.current < 3
+          ) {
+            lastAdDetectedTimeRef.current = now;
+            adSkipAttemptRef.current += 1;
+            console.log(`[Ad Handler] Attempting to skip ad (attempt ${adSkipAttemptRef.current}/3)`);
+
+            // Wait a moment then try to reload the video to skip the ad
+            setTimeout(() => {
+              if (ytPlayerRef.current && expectedVideoIdRef.current) {
+                ytPlayerRef.current.loadVideoById(expectedVideoIdRef.current);
+                ytPlayerRef.current.playVideo();
+              }
+            }, 500);
+          }
+        } else if (!adDetected && isAdMuted) {
+          // Ad ended - unmute the player and restore volume
+          ytPlayerRef.current.unMute();
+          ytPlayerRef.current.setVolume(volume);
+          setIsAdMuted(false);
+          // Reset skip attempts when ad ends successfully
+          adSkipAttemptRef.current = 0;
+          console.log('[Ad Handler] Ad ended, unmuting audio');
+        } else if (!adDetected && !isAdMuted) {
+          // No ad playing, reset attempts counter
+          adSkipAttemptRef.current = 0;
+        }
+      } catch (e) {
+        // Player not ready or method not available
+      }
+    };
+
+    // Poll every 500ms for YouTube progress and ad detection
+    const interval = setInterval(() => {
+      updateYoutubeProgress();
+      checkForAds();
+    }, 500);
+
     updateYoutubeProgress(); // Initial call
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentSong]);
+  }, [isPlaying, currentSong, isAdMuted, volume]);
 
-  // Schedule checker
+  // Schedule checker - runs every 30 seconds
   useEffect(() => {
     const checkSchedules = () => {
       const now = new Date();
       const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      const currentPlaylist = playlistRef.current;
+
+      console.log(`[Scheduler] Checking schedules at ${currentTimeStr}, playlist has ${currentPlaylist.length} songs`);
 
       setSchedules((prevSchedules) => {
-        return prevSchedules.map((schedule) => {
+        let shouldStartPlaying = false;
+        let shouldStopPlaying = false;
+
+        const updatedSchedules = prevSchedules.map((schedule) => {
           const shouldPlay = currentTimeStr >= schedule.startTime && currentTimeStr < schedule.stopTime;
 
-          if (shouldPlay && !schedule.isPlaying && playlist.length > 0) {
-            // Stop current playback first
-            ytPlayerRef.current?.pauseVideo();
-            audioRef.current?.pause();
-
-            // Reset and start fresh
-            setProgress(0);
-            setDuration(0);
-            const freshShuffle = shuffleArray(playlist);
-            setShuffledPlaylist(freshShuffle);
-            setIsShuffleEnabled(true);
-            setCurrentSongIndex(0);
-
-            // Small delay then play
-            setTimeout(() => setIsPlaying(true), 100);
+          if (shouldPlay && !schedule.isPlaying && currentPlaylist.length > 0) {
+            console.log(`[Scheduler] Starting schedule: ${schedule.startTime} - ${schedule.stopTime}`);
+            shouldStartPlaying = true;
             return { ...schedule, isPlaying: true };
           } else if (!shouldPlay && schedule.isPlaying) {
-            setIsPlaying(false);
-            ytPlayerRef.current?.pauseVideo();
-            audioRef.current?.pause();
+            console.log(`[Scheduler] Stopping schedule: ${schedule.startTime} - ${schedule.stopTime}`);
+            shouldStopPlaying = true;
             return { ...schedule, isPlaying: false };
           }
           return schedule;
         });
+
+        // Handle playback state changes outside of the map
+        if (shouldStartPlaying) {
+          // Stop current playback first
+          ytPlayerRef.current?.pauseVideo();
+          audioRef.current?.pause();
+
+          // Use setTimeout to avoid state update conflicts
+          setTimeout(() => {
+            const freshShuffle = shuffleArray(currentPlaylist);
+            setShuffledPlaylist(freshShuffle);
+            setIsShuffleEnabled(true);
+            setCurrentSongIndex(0);
+            setProgress(0);
+            setDuration(0);
+            // Give time for state to update before playing
+            setTimeout(() => {
+              console.log('[Scheduler] Starting playback');
+              setIsPlaying(true);
+            }, 200);
+          }, 100);
+        }
+
+        if (shouldStopPlaying) {
+          setTimeout(() => {
+            console.log('[Scheduler] Stopping playback');
+            setIsPlaying(false);
+            ytPlayerRef.current?.pauseVideo();
+            audioRef.current?.pause();
+          }, 100);
+        }
+
+        return updatedSchedules;
       });
     };
 
-    scheduleCheckIntervalRef.current = setInterval(checkSchedules, 60000);
+    // Check every 30 seconds for more responsive scheduling
+    scheduleCheckIntervalRef.current = setInterval(checkSchedules, 30000);
+    // Initial check
     checkSchedules();
 
     return () => {
       if (scheduleCheckIntervalRef.current) clearInterval(scheduleCheckIntervalRef.current);
     };
-  }, [playlist]);
+  }, []); // No dependencies - uses refs instead
 
   // Update schedules without preview thumbnails when YouTube videos are added
   useEffect(() => {
@@ -299,8 +437,18 @@ export default function MusicScheduler() {
     if (currentSong.type === 'youtube' && currentSong.videoId) {
       audioRef.current?.pause();
 
+      // Store the expected video ID for ad detection
+      expectedVideoIdRef.current = currentSong.videoId;
+
+      // Reset ad muted state and skip attempts when changing songs
+      setIsAdMuted(false);
+      adSkipAttemptRef.current = 0;
+      lastAdDetectedTimeRef.current = 0;
+
       if (ytPlayerRef.current) {
         ytPlayerRef.current.loadVideoById(currentSong.videoId);
+        ytPlayerRef.current.unMute(); // Ensure unmuted when starting new song
+        ytPlayerRef.current.setVolume(volume);
         ytPlayerRef.current.playVideo();
       } else if (ytApiReady && ytContainerRef.current) {
         ytPlayerRef.current = new window.YT.Player('youtube-player', {
@@ -321,6 +469,8 @@ export default function MusicScheduler() {
       }
     } else if (currentSong.type === 'audio') {
       ytPlayerRef.current?.pauseVideo();
+      expectedVideoIdRef.current = null; // Clear expected video ID for audio files
+      setIsAdMuted(false);
       if (audioRef.current) {
         audioRef.current.src = currentSong.url;
         audioRef.current.volume = volume / 100;
@@ -821,7 +971,16 @@ export default function MusicScheduler() {
 
                   {/* Info */}
                   <div className="flex-1 min-w-0 pt-4">
-                    <p className="text-xs font-medium text-[#0070f3] uppercase tracking-wider mb-3">Now Playing</p>
+                    <div className="flex items-center gap-3 mb-3">
+                      <p className="text-xs font-medium text-[#0070f3] uppercase tracking-wider">Now Playing</p>
+                      {/* Ad muted indicator */}
+                      {isAdMuted && (
+                        <span className="px-2 py-0.5 bg-[#f31260] text-white text-xs font-medium rounded-full flex items-center gap-1 animate-pulse">
+                          <VolumeX className="w-3 h-3" />
+                          Ad Muted
+                        </span>
+                      )}
+                    </div>
                     <h1 className="text-3xl font-bold text-white mb-2 truncate">
                       {currentSong?.title || 'Select a track'}
                     </h1>
@@ -1029,7 +1188,15 @@ export default function MusicScheduler() {
                 )}
               </div>
               <div className="min-w-0">
-                <p className="text-white text-sm font-medium truncate">{currentSong.title}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-white text-sm font-medium truncate">{currentSong.title}</p>
+                  {isAdMuted && (
+                    <span className="px-1.5 py-0.5 bg-[#f31260] text-white text-[10px] font-medium rounded flex items-center gap-1">
+                      <VolumeX className="w-2.5 h-2.5" />
+                      AD
+                    </span>
+                  )}
+                </div>
                 <p className="text-[#666] text-xs truncate">{currentSong.type === 'youtube' ? 'YouTube' : 'Audio File'}</p>
               </div>
             </>
