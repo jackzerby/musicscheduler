@@ -985,24 +985,14 @@ export default function MusicScheduler() {
 
                             <div className="flex gap-2">
                               <button
-                                onClick={() => schedule.isPlaying ? stopScheduleTest(schedule.id) : testSchedule(schedule.id)}
-                                className={`flex-1 py-2.5 rounded-lg font-medium text-sm transition-all ${
-                                  schedule.isPlaying
-                                    ? 'bg-[#f31260] text-white hover:bg-[#d60b54]'
-                                    : 'bg-white text-black hover:bg-[#e5e5e5]'
-                                }`}
-                              >
-                                {schedule.isPlaying ? 'Stop' : 'Test'}
-                              </button>
-                              <button
                                 onClick={() => startEditSchedule(schedule)}
-                                className="w-10 h-10 bg-[#1a1a1a] border border-[#262626] hover:border-[#404040] rounded-lg flex items-center justify-center transition-colors"
+                                className="flex-1 py-2.5 bg-[#1a1a1a] border border-[#262626] hover:border-[#404040] rounded-lg flex items-center justify-center transition-colors"
                               >
                                 <Edit2 className="w-4 h-4 text-[#888]" />
                               </button>
                               <button
                                 onClick={() => deleteSchedule(schedule.id)}
-                                className="w-10 h-10 bg-[#1a1a1a] border border-[#262626] hover:border-[#f31260] rounded-lg flex items-center justify-center transition-colors group/del"
+                                className="flex-1 py-2.5 bg-[#1a1a1a] border border-[#262626] hover:border-[#f31260] rounded-lg flex items-center justify-center transition-colors group/del"
                               >
                                 <Trash2 className="w-4 h-4 text-[#888] group-hover/del:text-[#f31260]" />
                               </button>
