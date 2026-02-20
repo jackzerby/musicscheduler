@@ -20,10 +20,7 @@ import {
   X,
   Check,
   Home,
-  Search,
-  Library,
   Repeat,
-  Heart,
 } from 'lucide-react';
 
 // Types
@@ -82,13 +79,7 @@ declare global {
   }
 }
 
-// Pre-loaded sample tracks
-const SAMPLE_TRACKS: Omit<Song, 'id'>[] = [
-  { title: 'Acoustic Breeze', type: 'audio', url: 'https://www.bensound.com/bensound-music/bensound-acousticbreeze.mp3' },
-  { title: 'Creative Minds', type: 'audio', url: 'https://www.bensound.com/bensound-music/bensound-creativeminds.mp3' },
-  { title: 'Happy Rock', type: 'audio', url: 'https://www.bensound.com/bensound-music/bensound-happyrock.mp3' },
-  { title: 'Sunny', type: 'audio', url: 'https://www.bensound.com/bensound-music/bensound-sunny.mp3' },
-];
+const STORAGE_KEY = 'musicscheduler_playlist';
 
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
@@ -161,12 +152,28 @@ export default function MusicScheduler() {
     ? activePlaylist[currentSongIndex]
     : null;
 
-  // Initialize with sample tracks
+  // Load playlist from localStorage
   useEffect(() => {
-    const initialSongs = SAMPLE_TRACKS.map((track) => ({ ...track, id: generateId() }));
-    setPlaylist(initialSongs);
-    setShuffledPlaylist(shuffleArray(initialSongs));
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const songs = JSON.parse(saved) as Song[];
+        setPlaylist(songs);
+        setShuffledPlaylist(shuffleArray(songs));
+      } catch (e) {
+        console.error('Failed to load playlist:', e);
+      }
+    }
   }, []);
+
+  // Save playlist to localStorage whenever it changes
+  useEffect(() => {
+    if (playlist.length > 0) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(playlist));
+    } else {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  }, [playlist]);
 
   // Load YouTube IFrame API
   useEffect(() => {
@@ -599,11 +606,11 @@ export default function MusicScheduler() {
   };
 
   const getScheduleStatus = (schedule: Schedule) => {
-    if (schedule.isPlaying) return { label: 'ACTIVE', className: 'bg-[#FFAB91] text-black' };
+    if (schedule.isPlaying) return { label: 'LIVE', className: 'bg-[#00d68f] text-black' };
     const now = new Date();
     const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    if (currentTimeStr < schedule.startTime) return { label: 'SCHEDULED', className: 'bg-[#B3B3B3] text-black' };
-    return { label: 'INACTIVE', className: 'bg-[#535353] text-white' };
+    if (currentTimeStr < schedule.startTime) return { label: 'SCHEDULED', className: 'bg-[#0070f3] text-white' };
+    return { label: 'INACTIVE', className: 'bg-[#333] text-[#888]' };
   };
 
   // Get current playing song's thumbnail (for schedule cards)
@@ -626,81 +633,103 @@ export default function MusicScheduler() {
   const progressPercent = duration > 0 ? (progress / duration) * 100 : 0;
 
   return (
-    <div className="h-screen flex flex-col bg-black font-spotify overflow-hidden">
+    <div className="h-screen flex flex-col bg-black overflow-hidden">
       <audio ref={audioRef} onEnded={handleAudioEnded} className="hidden" />
       <div ref={ytContainerRef} id="youtube-player" className="hidden" />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left Sidebar */}
-        <aside className="sidebar-desktop w-[72px] bg-black flex flex-col items-center py-2 flex-shrink-0 border-r border-[#282828]">
+        <aside className="sidebar-desktop w-[240px] bg-black flex flex-col flex-shrink-0 border-r border-[#262626]">
+          {/* Header */}
+          <div className="p-6 pb-4">
+            <h1 className="text-xl font-semibold text-white tracking-tight">Music Scheduler</h1>
+            <p className="text-[#666] text-sm mt-1">{playlist.length} tracks</p>
+          </div>
+
           {/* Add Music button */}
-          <button
-            onClick={() => setShowAddMusic(!showAddMusic)}
-            className={`w-12 h-12 flex items-center justify-center rounded-md mb-2 transition-colors ${showAddMusic ? 'bg-[#282828] text-white' : 'text-[#B3B3B3] hover:text-white'}`}
-            title="Add Music"
-          >
-            <Plus className="w-6 h-6" />
-          </button>
+          <div className="px-4 mb-4">
+            <button
+              onClick={() => setShowAddMusic(!showAddMusic)}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+                showAddMusic
+                  ? 'bg-white text-black'
+                  : 'bg-[#111] border border-[#262626] text-[#a1a1a1] hover:text-white hover:border-[#404040]'
+              }`}
+            >
+              <Plus className="w-4 h-4" />
+              <span className="text-sm font-medium">Add Music</span>
+            </button>
+          </div>
 
-          {/* Playlist icon */}
-          <button className="w-12 h-12 flex items-center justify-center mb-1">
-            <div className="w-12 h-12 bg-gradient-to-br from-[#450af5] to-[#c4efd9] rounded flex items-center justify-center">
-              <Heart className="w-5 h-5 text-white" fill="white" />
-            </div>
-          </button>
+          <div className="w-full h-px bg-[#262626]" />
 
-          <div className="w-8 h-px bg-[#282828] my-2" />
-
-          {/* Song thumbnails */}
-          <div className="flex-1 overflow-y-auto w-full px-2 space-y-2">
-            {playlist.slice(0, 8).map((song, i) => (
+          {/* Song list */}
+          <div className="flex-1 overflow-y-auto px-2 py-3">
+            {playlist.map((song, i) => (
               <button
                 key={song.id}
                 onClick={() => playSong(i)}
-                className={`w-12 h-12 rounded flex items-center justify-center transition-colors mx-auto ${
-                  currentSong?.id === song.id ? 'bg-[#FFAB91]' : 'bg-[#282828] hover:bg-[#3E3E3E]'
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all mb-1 ${
+                  currentSong?.id === song.id
+                    ? 'bg-[#171717] text-white'
+                    : 'text-[#888] hover:text-white hover:bg-[#111]'
                 }`}
                 title={song.title}
               >
-                <Music className={`w-5 h-5 ${currentSong?.id === song.id ? 'text-black' : 'text-[#B3B3B3]'}`} />
+                <div className={`w-8 h-8 rounded flex items-center justify-center flex-shrink-0 overflow-hidden ${
+                  currentSong?.id === song.id ? 'bg-[#0070f3]' : 'bg-[#1a1a1a]'
+                }`}>
+                  {song.type === 'youtube' && song.videoId ? (
+                    <img
+                      src={`https://img.youtube.com/vi/${song.videoId}/default.jpg`}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Music className="w-4 h-4" />
+                  )}
+                </div>
+                <span className="text-sm truncate flex-1 text-left">{song.title}</span>
+                {currentSong?.id === song.id && isPlaying && (
+                  <div className="flex items-end gap-0.5 h-3">
+                    <div className="w-0.5 bg-[#0070f3] equalizer-bar" />
+                    <div className="w-0.5 bg-[#0070f3] equalizer-bar" />
+                    <div className="w-0.5 bg-[#0070f3] equalizer-bar" />
+                  </div>
+                )}
               </button>
             ))}
-          </div>
-
-          {/* Song count */}
-          <div className="py-3 text-[#B3B3B3] text-xs text-center">
-            {playlist.length}
           </div>
         </aside>
 
         {/* Add Music Panel */}
         {showAddMusic && (
-          <div className="w-[280px] bg-[#121212] border-r border-[#282828] flex flex-col flex-shrink-0">
-            <div className="p-4 border-b border-[#282828] flex items-center justify-between">
-              <h3 className="text-white font-bold text-lg">Add Music</h3>
-              <button onClick={() => setShowAddMusic(false)} className="text-[#B3B3B3] hover:text-white">
+          <div className="w-[320px] bg-[#0a0a0a] border-r border-[#262626] flex flex-col flex-shrink-0">
+            <div className="p-6 border-b border-[#262626] flex items-center justify-between">
+              <h3 className="text-white font-semibold">Add Music</h3>
+              <button onClick={() => setShowAddMusic(false)} className="text-[#666] hover:text-white transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {/* YouTube URL */}
               <div>
-                <label className="text-[#B3B3B3] text-xs uppercase tracking-wider block mb-2">YouTube URL</label>
+                <label className="text-[#888] text-xs uppercase tracking-wider block mb-3">YouTube URL</label>
                 <div className="relative">
-                  <Link className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#B3B3B3]" />
+                  <Link className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#666]" />
                   <input
                     type="text"
                     value={youtubeUrl}
                     onChange={(e) => setYoutubeUrl(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && addYoutubeUrl()}
                     placeholder="Paste URL here"
-                    className="w-full pl-10 pr-3 py-2.5 bg-[#242424] text-white text-sm placeholder-[#B3B3B3] rounded-md focus:outline-none focus:ring-2 focus:ring-[#FFAB91]"
+                    className="w-full pl-11 pr-4 py-3 bg-[#111] border border-[#262626] text-white text-sm placeholder-[#666] rounded-lg focus:outline-none focus:border-[#0070f3] transition-colors"
                   />
                 </div>
                 <button
                   onClick={addYoutubeUrl}
                   disabled={isAddingUrl}
-                  className="w-full mt-2 py-2.5 bg-[#FFAB91] hover:bg-[#FFCCBC] disabled:bg-[#FFAB91]/50 text-black font-semibold text-sm rounded-full transition-colors disabled:cursor-not-allowed"
+                  className="w-full mt-3 py-3 bg-white hover:bg-[#e5e5e5] disabled:bg-[#333] disabled:text-[#666] text-black font-medium text-sm rounded-lg transition-colors disabled:cursor-not-allowed"
                 >
                   {isAddingUrl ? 'Adding...' : 'Add URL'}
                 </button>
@@ -709,24 +738,25 @@ export default function MusicScheduler() {
               {/* Bulk */}
               <button
                 onClick={() => setShowBulkInput(!showBulkInput)}
-                className="w-full py-2 text-[#B3B3B3] hover:text-white text-sm transition-colors text-left"
+                className="w-full py-2 text-[#666] hover:text-white text-sm transition-colors text-left flex items-center gap-2"
               >
-                {showBulkInput ? '- Hide Bulk Add' : '+ Bulk Add URLs'}
+                <span className="text-lg">{showBulkInput ? '−' : '+'}</span>
+                Bulk Add URLs
               </button>
 
               {showBulkInput && (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <textarea
                     value={bulkUrls}
                     onChange={(e) => setBulkUrls(e.target.value)}
                     placeholder="One URL per line"
                     rows={4}
-                    className="w-full p-3 bg-[#242424] text-white text-sm placeholder-[#B3B3B3] rounded-md focus:outline-none focus:ring-2 focus:ring-[#FFAB91] resize-none"
+                    className="w-full p-4 bg-[#111] border border-[#262626] text-white text-sm placeholder-[#666] rounded-lg focus:outline-none focus:border-[#0070f3] resize-none transition-colors"
                   />
                   <button
                     onClick={addBulkUrls}
                     disabled={isAddingUrl}
-                    className="w-full py-2 bg-[#282828] hover:bg-[#3E3E3E] disabled:bg-[#282828]/50 text-white text-sm rounded-full transition-colors disabled:cursor-not-allowed"
+                    className="w-full py-3 bg-[#1a1a1a] border border-[#262626] hover:border-[#404040] disabled:opacity-50 text-white text-sm rounded-lg transition-colors disabled:cursor-not-allowed"
                   >
                     {isAddingUrl ? 'Adding...' : 'Add All URLs'}
                   </button>
@@ -735,29 +765,14 @@ export default function MusicScheduler() {
 
               {/* File Upload */}
               <div>
-                <label className="text-[#B3B3B3] text-xs uppercase tracking-wider block mb-2">Upload Files</label>
+                <label className="text-[#888] text-xs uppercase tracking-wider block mb-3">Upload Files</label>
                 <input ref={fileInputRef} type="file" accept="audio/*" multiple onChange={handleFileUpload} className="hidden" />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-full py-2.5 flex items-center justify-center gap-2 bg-[#242424] hover:bg-[#3E3E3E] text-white text-sm rounded-md transition-colors"
+                  className="w-full py-3 flex items-center justify-center gap-2 bg-[#111] border border-[#262626] border-dashed hover:border-[#404040] text-[#888] hover:text-white text-sm rounded-lg transition-colors"
                 >
                   <Upload className="w-4 h-4" />
                   Choose Files
-                </button>
-              </div>
-
-              {/* Sample Tracks */}
-              <div>
-                <label className="text-[#B3B3B3] text-xs uppercase tracking-wider block mb-2">Sample Tracks</label>
-                <button
-                  onClick={() => {
-                    const newSongs = SAMPLE_TRACKS.map((t) => ({ ...t, id: generateId() }));
-                    setPlaylist((prev) => [...prev, ...newSongs]);
-                    setShuffledPlaylist((prev) => shuffleArray([...prev, ...newSongs]));
-                  }}
-                  className="w-full py-2.5 text-[#B3B3B3] hover:text-white text-sm transition-colors border border-[#535353] hover:border-white rounded-md"
-                >
-                  + Add Sample Tracks
                 </button>
               </div>
             </div>
@@ -765,183 +780,157 @@ export default function MusicScheduler() {
         )}
 
         {/* Main Content Area */}
-        <main className="flex-1 bg-[#121212] overflow-hidden flex flex-col">
+        <main className="flex-1 bg-[#0a0a0a] overflow-hidden flex flex-col">
           <div className="flex-1 overflow-y-auto">
             {/* Hero Section */}
-            <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-b from-[#FFAB91] via-[#E57355] to-[#121212] h-[340px]" />
+            <div className="relative border-b border-[#262626]">
+              <div className="absolute inset-0 bg-gradient-to-b from-[#111] to-[#0a0a0a]" />
 
-              <div className="relative p-6 pt-8">
-                <div className="flex items-end gap-6">
+              <div className="relative p-8 pt-12">
+                <div className="flex items-start gap-8">
                   {/* Album Art */}
-                  <div className="w-[200px] h-[200px] bg-gradient-to-br from-[#FFAB91] to-[#E57355] rounded shadow-2xl flex items-center justify-center flex-shrink-0">
-                    <Music className="w-20 h-20 text-white/80" />
+                  <div className="w-[180px] h-[180px] bg-[#111] border border-[#262626] rounded-xl flex items-center justify-center flex-shrink-0 relative overflow-hidden group">
+                    {currentSong?.type === 'youtube' && currentSong.videoId ? (
+                      <img
+                        src={`https://img.youtube.com/vi/${currentSong.videoId}/mqdefault.jpg`}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-br from-[#0070f3] to-[#00a2ff] flex items-center justify-center">
+                        <Music className="w-16 h-16 text-white/80" />
+                      </div>
+                    )}
+                    {isPlaying && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <div className="flex items-end gap-1 h-8">
+                          <div className="w-1 bg-white equalizer-bar rounded-full" />
+                          <div className="w-1 bg-white equalizer-bar rounded-full" />
+                          <div className="w-1 bg-white equalizer-bar rounded-full" />
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Info */}
-                  <div className="flex-1 min-w-0 pb-2">
-                    <p className="text-sm font-medium text-white/80 mb-2">Playlist</p>
-                    <h1 className="text-5xl md:text-6xl font-black text-white mb-4 tracking-tight">
-                      My Music Scheduler
+                  <div className="flex-1 min-w-0 pt-4">
+                    <p className="text-xs font-medium text-[#0070f3] uppercase tracking-wider mb-3">Now Playing</p>
+                    <h1 className="text-3xl font-bold text-white mb-2 truncate">
+                      {currentSong?.title || 'Select a track'}
                     </h1>
-                    <p className="text-[#B3B3B3] text-sm">
-                      {playlist.length} songs • ~{Math.ceil(playlist.length * 3.5)} min
+                    <p className="text-[#666] text-sm mb-6">
+                      {currentSong ? (currentSong.type === 'youtube' ? 'YouTube' : 'Audio File') : 'No track selected'}
                     </p>
-                  </div>
-                </div>
 
-                {/* Controls */}
-                <div className="flex items-center gap-4 mt-6">
-                  <button
-                    onClick={togglePlayPause}
-                    className="w-14 h-14 bg-[#FFAB91] hover:bg-[#FFCCBC] hover:scale-105 rounded-full flex items-center justify-center shadow-lg transition-all"
-                  >
-                    {isPlaying ? (
-                      <Pause className="w-6 h-6 text-black" fill="black" />
-                    ) : (
-                      <Play className="w-6 h-6 text-black ml-1" fill="black" />
-                    )}
-                  </button>
-
-                  <button
-                    onClick={toggleShuffle}
-                    className={`p-3 rounded-full transition-colors ${isShuffleEnabled ? 'text-[#FFAB91] bg-[#FFAB91]/20' : 'text-[#B3B3B3] hover:text-white'}`}
-                    title={isShuffleEnabled ? 'Shuffle On' : 'Shuffle Off'}
-                  >
-                    <Shuffle className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Song List */}
-            <div className="px-6">
-              <div className="grid grid-cols-[32px_1fr_80px] gap-4 px-4 py-2 border-b border-[#282828] text-[#B3B3B3] text-sm">
-                <span>#</span>
-                <span>Title</span>
-                <span className="flex justify-end">
-                  <Clock className="w-4 h-4" />
-                </span>
-              </div>
-
-              <div className="mt-2">
-                {activePlaylist.length === 0 ? (
-                  <div className="text-center py-16">
-                    <Music className="w-16 h-16 text-[#535353] mx-auto mb-4" />
-                    <p className="text-[#B3B3B3] text-lg">No songs in playlist</p>
-                    <p className="text-[#535353] text-sm mt-2">Click the + button to add music</p>
-                  </div>
-                ) : (
-                  activePlaylist.map((song, index) => (
-                    <div
-                      key={song.id}
-                      onClick={() => playSong(index)}
-                      className={`song-row grid grid-cols-[32px_1fr_80px] gap-4 px-4 py-2 rounded-md cursor-pointer group ${
-                        currentSong?.id === song.id ? 'bg-[#ffffff1a]' : ''
-                      }`}
-                    >
-                      <div className="flex items-center justify-center">
-                        {currentSong?.id === song.id && isPlaying ? (
-                          <div className="flex items-end gap-0.5 h-4">
-                            <div className="w-0.5 bg-[#FFAB91] equalizer-bar" />
-                            <div className="w-0.5 bg-[#FFAB91] equalizer-bar" />
-                            <div className="w-0.5 bg-[#FFAB91] equalizer-bar" />
-                          </div>
+                    {/* Controls */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={togglePlayPause}
+                        className="w-12 h-12 bg-white hover:bg-[#e5e5e5] rounded-full flex items-center justify-center transition-all hover:scale-105"
+                      >
+                        {isPlaying ? (
+                          <Pause className="w-5 h-5 text-black" fill="black" />
                         ) : (
-                          <>
-                            <span className={`track-number text-sm ${currentSong?.id === song.id ? 'text-[#FFAB91]' : 'text-[#B3B3B3]'}`}>
-                              {index + 1}
-                            </span>
-                            <Play className="track-play w-4 h-4 text-white" fill="white" />
-                          </>
+                          <Play className="w-5 h-5 text-black ml-0.5" fill="black" />
                         )}
-                      </div>
+                      </button>
 
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-10 h-10 bg-[#282828] rounded flex items-center justify-center flex-shrink-0 overflow-hidden">
-                          {song.type === 'youtube' && song.videoId ? (
-                            <img
-                              src={`https://img.youtube.com/vi/${song.videoId}/default.jpg`}
-                              alt={song.title}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <Music className="w-5 h-5 text-[#B3B3B3]" />
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className={`font-medium truncate ${currentSong?.id === song.id ? 'text-[#FFAB91]' : 'text-white'}`}>
-                            {song.title}
-                          </p>
-                          <p className="text-[#B3B3B3] text-sm truncate">
-                            {song.type === 'youtube' ? 'YouTube' : 'Audio File'}
-                          </p>
-                        </div>
-                      </div>
+                      <button
+                        onClick={playPrevSong}
+                        className="w-10 h-10 bg-[#1a1a1a] border border-[#262626] hover:border-[#404040] rounded-full flex items-center justify-center transition-colors"
+                      >
+                        <SkipBack className="w-4 h-4 text-white" fill="white" />
+                      </button>
 
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); removeSong(song.id); }}
-                          className="menu-btn p-1.5 text-[#B3B3B3] hover:text-red-500 rounded-full transition-all"
-                          title="Remove"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                      <button
+                        onClick={playNextSong}
+                        className="w-10 h-10 bg-[#1a1a1a] border border-[#262626] hover:border-[#404040] rounded-full flex items-center justify-center transition-colors"
+                      >
+                        <SkipForward className="w-4 h-4 text-white" fill="white" />
+                      </button>
+
+                      <button
+                        onClick={toggleShuffle}
+                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                          isShuffleEnabled
+                            ? 'bg-[#0070f3] text-white'
+                            : 'bg-[#1a1a1a] border border-[#262626] hover:border-[#404040] text-[#888]'
+                        }`}
+                      >
+                        <Shuffle className="w-4 h-4" />
+                      </button>
                     </div>
-                  ))
-                )}
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                <div className="mt-8 flex items-center gap-3">
+                  <span className="text-[#666] text-xs w-10 text-right font-mono">{formatTime(progress)}</span>
+                  <div
+                    className="flex-1 h-1 bg-[#262626] rounded-full relative group cursor-pointer"
+                    onClick={handleSeek}
+                  >
+                    <div className="absolute inset-y-0 left-0 bg-white rounded-full transition-colors" style={{ width: `${progressPercent}%` }} />
+                    <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg" style={{ left: `calc(${progressPercent}% - 6px)` }} />
+                  </div>
+                  <span className="text-[#666] text-xs w-10 font-mono">{formatTime(duration)}</span>
+                </div>
               </div>
             </div>
 
             {/* Schedules Section */}
-            <div className="px-6 py-8">
-              <h2 className="text-2xl font-bold text-white mb-6">Schedules</h2>
+            <div className="p-8">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-semibold text-white">Schedules</h2>
+                <span className="text-[#666] text-sm">{schedules.length} active</span>
+              </div>
 
-              <div className="bg-[#181818] rounded-lg p-6 mb-6">
-                <h3 className="text-white font-semibold mb-4">Create New Schedule</h3>
+              {/* Create Schedule */}
+              <div className="vercel-card p-6 mb-6">
                 <div className="flex flex-wrap items-end gap-4">
                   <div>
-                    <label className="text-[#B3B3B3] text-xs uppercase tracking-wider block mb-2">Start Time</label>
+                    <label className="text-[#666] text-xs uppercase tracking-wider block mb-2">Start</label>
                     <input
                       type="time"
                       value={newScheduleStart}
                       onChange={(e) => setNewScheduleStart(e.target.value)}
-                      className="px-4 py-2 bg-[#242424] text-white rounded-md focus:outline-none focus:ring-2 focus:ring-[#FFAB91]"
+                      className="px-4 py-2.5 bg-[#111] border border-[#262626] text-white rounded-lg focus:outline-none focus:border-[#0070f3] transition-colors"
                     />
                   </div>
                   <div>
-                    <label className="text-[#B3B3B3] text-xs uppercase tracking-wider block mb-2">Stop Time</label>
+                    <label className="text-[#666] text-xs uppercase tracking-wider block mb-2">End</label>
                     <input
                       type="time"
                       value={newScheduleStop}
                       onChange={(e) => setNewScheduleStop(e.target.value)}
-                      className="px-4 py-2 bg-[#242424] text-white rounded-md focus:outline-none focus:ring-2 focus:ring-[#FFAB91]"
+                      className="px-4 py-2.5 bg-[#111] border border-[#262626] text-white rounded-lg focus:outline-none focus:border-[#0070f3] transition-colors"
                     />
                   </div>
-                  <label className="flex items-center gap-2 cursor-pointer py-2">
+                  <label className="flex items-center gap-2 cursor-pointer py-2.5">
                     <input
                       type="checkbox"
                       checked={newScheduleRepeat}
                       onChange={(e) => setNewScheduleRepeat(e.target.checked)}
-                      className="w-4 h-4 rounded bg-[#242424] border-[#535353] text-[#FFAB91] focus:ring-[#FFAB91]"
+                      className="w-4 h-4 rounded bg-[#111] border-[#262626] text-[#0070f3] focus:ring-[#0070f3]"
                     />
-                    <span className="text-[#B3B3B3] text-sm">Repeat daily</span>
+                    <span className="text-[#888] text-sm">Repeat daily</span>
                   </label>
                   <button
                     onClick={addSchedule}
-                    className="px-6 py-2 bg-[#FFAB91] hover:bg-[#FFCCBC] text-black font-semibold rounded-full transition-colors"
+                    className="px-6 py-2.5 bg-white hover:bg-[#e5e5e5] text-black font-medium text-sm rounded-lg transition-colors"
                   >
-                    Add Schedule
+                    Create Schedule
                   </button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {/* Schedule Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {schedules.length === 0 ? (
-                  <div className="col-span-full text-center py-12 bg-[#181818] rounded-lg">
-                    <Clock className="w-12 h-12 text-[#535353] mx-auto mb-4" />
-                    <p className="text-[#B3B3B3]">No schedules created</p>
+                  <div className="col-span-full text-center py-16 vercel-card">
+                    <Clock className="w-10 h-10 text-[#333] mx-auto mb-4" />
+                    <p className="text-[#666]">No schedules created</p>
+                    <p className="text-[#444] text-sm mt-1">Create one above to get started</p>
                   </div>
                 ) : (
                   schedules.map((schedule) => {
@@ -949,54 +938,67 @@ export default function MusicScheduler() {
                     const isEditing = editingScheduleId === schedule.id;
 
                     return (
-                      <div key={schedule.id} className="spotify-card p-4 group relative">
+                      <div key={schedule.id} className="vercel-card p-5 group relative">
                         {isEditing ? (
                           <div className="space-y-3">
-                            <input type="time" value={editScheduleStart} onChange={(e) => setEditScheduleStart(e.target.value)} className="w-full px-3 py-2 bg-[#242424] text-white rounded-md" />
-                            <input type="time" value={editScheduleStop} onChange={(e) => setEditScheduleStop(e.target.value)} className="w-full px-3 py-2 bg-[#242424] text-white rounded-md" />
+                            <input type="time" value={editScheduleStart} onChange={(e) => setEditScheduleStart(e.target.value)} className="w-full px-3 py-2 bg-[#111] border border-[#262626] text-white rounded-lg" />
+                            <input type="time" value={editScheduleStop} onChange={(e) => setEditScheduleStop(e.target.value)} className="w-full px-3 py-2 bg-[#111] border border-[#262626] text-white rounded-lg" />
                             <label className="flex items-center gap-2">
                               <input type="checkbox" checked={editScheduleRepeat} onChange={(e) => setEditScheduleRepeat(e.target.checked)} className="w-4 h-4 rounded" />
-                              <span className="text-[#B3B3B3] text-sm">Repeat</span>
+                              <span className="text-[#888] text-sm">Repeat</span>
                             </label>
                             <div className="flex gap-2">
-                              <button onClick={saveEditSchedule} className="flex-1 py-2 bg-[#FFAB91] text-black rounded-full"><Check className="w-4 h-4 mx-auto" /></button>
-                              <button onClick={() => setEditingScheduleId(null)} className="flex-1 py-2 bg-[#535353] text-white rounded-full"><X className="w-4 h-4 mx-auto" /></button>
+                              <button onClick={saveEditSchedule} className="flex-1 py-2.5 bg-white text-black rounded-lg hover:bg-[#e5e5e5] transition-colors"><Check className="w-4 h-4 mx-auto" /></button>
+                              <button onClick={() => setEditingScheduleId(null)} className="flex-1 py-2.5 bg-[#262626] text-white rounded-lg hover:bg-[#333] transition-colors"><X className="w-4 h-4 mx-auto" /></button>
                             </div>
                           </div>
                         ) : (
                           <>
-                            <div className="aspect-square bg-gradient-to-br from-[#282828] to-[#121212] rounded-md mb-3 flex items-center justify-center relative overflow-hidden">
-                              {schedule.isPlaying && currentSongThumbnail ? (
-                                <img
-                                  src={currentSongThumbnail}
-                                  alt="Now playing"
-                                  className="w-full h-full object-cover"
-                                />
-                              ) : schedule.previewVideoId ? (
-                                <img
-                                  src={`https://img.youtube.com/vi/${schedule.previewVideoId}/mqdefault.jpg`}
-                                  alt="Schedule preview"
-                                  className="w-full h-full object-cover opacity-80"
-                                />
-                              ) : (
-                                <Clock className="w-12 h-12 text-[#535353]" />
+                            <div className="flex items-start justify-between mb-4">
+                              <div>
+                                <h4 className="text-white font-semibold text-lg">{schedule.startTime}</h4>
+                                <p className="text-[#666] text-sm">to {schedule.stopTime}</p>
+                              </div>
+                              <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${status.className}`}>
+                                {status.label}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2 text-[#666] text-sm mb-4">
+                              <Music className="w-4 h-4" />
+                              <span>{playlist.length} tracks</span>
+                              {schedule.repeatDaily && (
+                                <>
+                                  <span className="text-[#333]">•</span>
+                                  <Repeat className="w-3 h-3" />
+                                  <span>Daily</span>
+                                </>
                               )}
+                            </div>
+
+                            <div className="flex gap-2">
                               <button
                                 onClick={() => schedule.isPlaying ? stopScheduleTest(schedule.id) : testSchedule(schedule.id)}
-                                className="absolute bottom-2 right-2 w-10 h-10 bg-[#FFAB91] rounded-full flex items-center justify-center shadow-lg opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all"
+                                className={`flex-1 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                                  schedule.isPlaying
+                                    ? 'bg-[#f31260] text-white hover:bg-[#d60b54]'
+                                    : 'bg-white text-black hover:bg-[#e5e5e5]'
+                                }`}
                               >
-                                {schedule.isPlaying ? <Pause className="w-5 h-5 text-black" fill="black" /> : <Play className="w-5 h-5 text-black ml-0.5" fill="black" />}
+                                {schedule.isPlaying ? 'Stop' : 'Test'}
                               </button>
-                            </div>
-                            <h4 className="text-white font-semibold truncate">{schedule.startTime} - {schedule.stopTime}</h4>
-                            <p className="text-[#B3B3B3] text-sm">{playlist.length} songs</p>
-                            <div className="flex gap-1 mt-2">
-                              <span className={`px-2 py-0.5 text-xs font-bold rounded ${status.className}`}>{status.label}</span>
-                              {schedule.repeatDaily && <span className="px-2 py-0.5 text-xs font-bold rounded bg-[#7C3AED] text-white flex items-center gap-1"><Repeat className="w-3 h-3" />DAILY</span>}
-                            </div>
-                            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button onClick={() => startEditSchedule(schedule)} className="p-1.5 bg-black/60 rounded-full text-[#B3B3B3] hover:text-white"><Edit2 className="w-3 h-3" /></button>
-                              <button onClick={() => deleteSchedule(schedule.id)} className="p-1.5 bg-black/60 rounded-full text-[#B3B3B3] hover:text-red-500"><Trash2 className="w-3 h-3" /></button>
+                              <button
+                                onClick={() => startEditSchedule(schedule)}
+                                className="w-10 h-10 bg-[#1a1a1a] border border-[#262626] hover:border-[#404040] rounded-lg flex items-center justify-center transition-colors"
+                              >
+                                <Edit2 className="w-4 h-4 text-[#888]" />
+                              </button>
+                              <button
+                                onClick={() => deleteSchedule(schedule.id)}
+                                className="w-10 h-10 bg-[#1a1a1a] border border-[#262626] hover:border-[#f31260] rounded-lg flex items-center justify-center transition-colors group/del"
+                              >
+                                <Trash2 className="w-4 h-4 text-[#888] group-hover/del:text-[#f31260]" />
+                              </button>
                             </div>
                           </>
                         )}
@@ -1013,12 +1015,12 @@ export default function MusicScheduler() {
       </div>
 
       {/* Bottom Player Bar */}
-      <footer className="h-[90px] bg-[#181818] border-t border-[#282828] flex items-center px-4 flex-shrink-0">
+      <footer className="h-[72px] bg-black border-t border-[#262626] flex items-center px-6 flex-shrink-0">
         {/* Left: Now playing */}
         <div className="w-[30%] min-w-[180px] flex items-center gap-3">
           {currentSong ? (
             <>
-              <div className="w-14 h-14 bg-[#282828] rounded flex items-center justify-center flex-shrink-0 overflow-hidden">
+              <div className="w-12 h-12 bg-[#111] border border-[#262626] rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden">
                 {currentSong.type === 'youtube' && currentSong.videoId ? (
                   <img
                     src={`https://img.youtube.com/vi/${currentSong.videoId}/mqdefault.jpg`}
@@ -1026,56 +1028,38 @@ export default function MusicScheduler() {
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <Music className="w-6 h-6 text-[#B3B3B3]" />
+                  <Music className="w-5 h-5 text-[#666]" />
                 )}
               </div>
               <div className="min-w-0">
                 <p className="text-white text-sm font-medium truncate">{currentSong.title}</p>
-                <p className="text-[#B3B3B3] text-xs truncate">{currentSong.type === 'youtube' ? 'YouTube' : 'Audio File'}</p>
+                <p className="text-[#666] text-xs truncate">{currentSong.type === 'youtube' ? 'YouTube' : 'Audio File'}</p>
               </div>
             </>
           ) : (
-            <div className="text-[#B3B3B3] text-sm">No song playing</div>
+            <div className="text-[#666] text-sm">No track selected</div>
           )}
         </div>
 
-        {/* Center: Controls */}
-        <div className="flex-1 max-w-[722px] flex flex-col items-center gap-2">
-          <div className="flex items-center gap-4">
-            <button onClick={toggleShuffle} className={`p-1.5 ${isShuffleEnabled ? 'text-[#FFAB91]' : 'text-[#B3B3B3] hover:text-white'}`}>
-              <Shuffle className="w-4 h-4" />
-            </button>
-            <button onClick={playPrevSong} className="p-1.5 text-[#B3B3B3] hover:text-white">
-              <SkipBack className="w-5 h-5" fill="currentColor" />
-            </button>
-            <button onClick={togglePlayPause} className="w-9 h-9 bg-white rounded-full flex items-center justify-center hover:scale-105 transition-transform">
-              {isPlaying ? <Pause className="w-5 h-5 text-black" fill="black" /> : <Play className="w-5 h-5 text-black ml-0.5" fill="black" />}
-            </button>
-            <button onClick={playNextSong} className="p-1.5 text-[#B3B3B3] hover:text-white">
-              <SkipForward className="w-5 h-5" fill="currentColor" />
-            </button>
-          </div>
-
-          {/* Progress bar */}
-          <div className="w-full flex items-center gap-2 text-[#B3B3B3] text-xs">
-            <span className="w-10 text-right">{formatTime(progress)}</span>
-            <div
-              className="flex-1 h-1 bg-[#4D4D4D] rounded-full relative group cursor-pointer"
-              onClick={handleSeek}
-            >
-              <div className="absolute inset-y-0 left-0 bg-white group-hover:bg-[#FFAB91] rounded-full transition-colors" style={{ width: `${progressPercent}%` }} />
-              <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity" style={{ left: `calc(${progressPercent}% - 6px)` }} />
-            </div>
-            <span className="w-10">{formatTime(duration)}</span>
-          </div>
+        {/* Center: Mini Controls */}
+        <div className="flex-1 flex items-center justify-center gap-2">
+          <button onClick={playPrevSong} className="p-2 text-[#666] hover:text-white transition-colors">
+            <SkipBack className="w-4 h-4" fill="currentColor" />
+          </button>
+          <button onClick={togglePlayPause} className="w-10 h-10 bg-white rounded-full flex items-center justify-center hover:scale-105 transition-transform">
+            {isPlaying ? <Pause className="w-4 h-4 text-black" fill="black" /> : <Play className="w-4 h-4 text-black ml-0.5" fill="black" />}
+          </button>
+          <button onClick={playNextSong} className="p-2 text-[#666] hover:text-white transition-colors">
+            <SkipForward className="w-4 h-4" fill="currentColor" />
+          </button>
         </div>
 
         {/* Right: Volume */}
-        <div className="w-[30%] min-w-[180px] flex items-center justify-end gap-2">
-          <button onClick={() => setVolume(volume === 0 ? 70 : 0)} className="p-1.5 text-[#B3B3B3] hover:text-white">
+        <div className="w-[30%] min-w-[180px] flex items-center justify-end gap-3">
+          <button onClick={() => setVolume(volume === 0 ? 70 : 0)} className="p-2 text-[#666] hover:text-white transition-colors">
             {getVolumeIcon()}
           </button>
-          <div className="w-28 h-1 bg-[#4D4D4D] rounded-full relative group cursor-pointer">
+          <div className="w-24 h-1 bg-[#262626] rounded-full relative group cursor-pointer">
             <input
               type="range"
               min="0"
@@ -1084,26 +1068,25 @@ export default function MusicScheduler() {
               onChange={(e) => setVolume(parseInt(e.target.value))}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             />
-            <div className="absolute inset-y-0 left-0 bg-white group-hover:bg-[#FFAB91] rounded-full pointer-events-none transition-colors" style={{ width: `${volume}%` }} />
-            <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity" style={{ left: `calc(${volume}% - 6px)` }} />
+            <div className="absolute inset-y-0 left-0 bg-white rounded-full pointer-events-none transition-colors" style={{ width: `${volume}%` }} />
           </div>
         </div>
       </footer>
 
       {/* Mobile Bottom Nav */}
-      <nav className="mobile-nav fixed bottom-0 left-0 right-0 bg-black/95 backdrop-blur-lg z-50 border-t border-[#282828]">
+      <nav className="mobile-nav fixed bottom-0 left-0 right-0 bg-black/95 backdrop-blur-xl z-50 border-t border-[#262626]">
         <div className="flex justify-around py-3">
           <button className="flex flex-col items-center gap-1 text-white">
-            <Home className="w-6 h-6" />
+            <Home className="w-5 h-5" />
             <span className="text-xs">Home</span>
           </button>
-          <button className="flex flex-col items-center gap-1 text-[#B3B3B3]" onClick={() => setShowAddMusic(true)}>
-            <Plus className="w-6 h-6" />
+          <button className="flex flex-col items-center gap-1 text-[#666]" onClick={() => setShowAddMusic(true)}>
+            <Plus className="w-5 h-5" />
             <span className="text-xs">Add</span>
           </button>
-          <button className="flex flex-col items-center gap-1 text-[#B3B3B3]">
-            <Library className="w-6 h-6" />
-            <span className="text-xs">Library</span>
+          <button className="flex flex-col items-center gap-1 text-[#666]">
+            <Clock className="w-5 h-5" />
+            <span className="text-xs">Schedules</span>
           </button>
         </div>
       </nav>
