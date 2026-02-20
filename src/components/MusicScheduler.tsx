@@ -666,15 +666,14 @@ export default function MusicScheduler() {
           {/* Song list */}
           <div className="flex-1 overflow-y-auto px-2 py-3">
             {playlist.map((song, i) => (
-              <button
+              <div
                 key={song.id}
-                onClick={() => playSong(i)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all mb-1 ${
+                className={`group w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all mb-1 cursor-pointer ${
                   currentSong?.id === song.id
                     ? 'bg-[#171717] text-white'
                     : 'text-[#888] hover:text-white hover:bg-[#111]'
                 }`}
-                title={song.title}
+                onClick={() => playSong(i)}
               >
                 <div className={`w-8 h-8 rounded flex items-center justify-center flex-shrink-0 overflow-hidden ${
                   currentSong?.id === song.id ? 'bg-[#0070f3]' : 'bg-[#1a1a1a]'
@@ -690,14 +689,22 @@ export default function MusicScheduler() {
                   )}
                 </div>
                 <span className="text-sm truncate flex-1 text-left">{song.title}</span>
-                {currentSong?.id === song.id && isPlaying && (
+                {currentSong?.id === song.id && isPlaying ? (
                   <div className="flex items-end gap-0.5 h-3">
                     <div className="w-0.5 bg-[#0070f3] equalizer-bar" />
                     <div className="w-0.5 bg-[#0070f3] equalizer-bar" />
                     <div className="w-0.5 bg-[#0070f3] equalizer-bar" />
                   </div>
+                ) : (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removeSong(song.id); }}
+                    className="p-1 text-[#666] hover:text-[#f31260] opacity-0 group-hover:opacity-100 transition-all"
+                    title="Remove"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 )}
-              </button>
+              </div>
             ))}
           </div>
         </aside>
