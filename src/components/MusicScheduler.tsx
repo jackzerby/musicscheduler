@@ -146,6 +146,7 @@ export default function MusicScheduler() {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isAddingUrl, setIsAddingUrl] = useState(false);
+  const [currentTime, setCurrentTime] = useState('');
 
   // Ad muting and skipping state
   const [isAdMuted, setIsAdMuted] = useState(false);
@@ -212,6 +213,21 @@ export default function MusicScheduler() {
       localStorage.removeItem(SCHEDULES_STORAGE_KEY);
     }
   }, [schedules]);
+
+  // Update current time display every second
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      const hours = now.getHours() % 12 || 12;
+      const minutes = now.getMinutes().toString().padStart(2, '0');
+      const seconds = now.getSeconds().toString().padStart(2, '0');
+      const period = now.getHours() >= 12 ? 'PM' : 'AM';
+      setCurrentTime(`${hours}:${minutes}:${seconds} ${period}`);
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Load YouTube IFrame API
   useEffect(() => {
@@ -343,14 +359,19 @@ export default function MusicScheduler() {
     return () => clearInterval(interval);
   }, [isPlaying, currentSong, isAdMuted, volume]);
 
-  // Schedule checker - runs every 30 seconds
+  // Schedule checker - runs every 10 seconds
   useEffect(() => {
     const checkSchedules = () => {
       const now = new Date();
       const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
       const currentPlaylist = playlistRef.current;
 
-      console.log(`[Scheduler] Checking schedules at ${currentTimeStr}, playlist has ${currentPlaylist.length} songs`);
+      console.log(`[Scheduler] Checking at ${currentTimeStr}, ${currentPlaylist.length} songs, ${schedules.length} schedules`);
+
+      schedules.forEach((schedule, i) => {
+        const shouldPlay = currentTimeStr >= schedule.startTime && currentTimeStr < schedule.stopTime;
+        console.log(`[Scheduler] Schedule ${i}: ${schedule.startTime}-${schedule.stopTime}, shouldPlay=${shouldPlay}, isPlaying=${schedule.isPlaying}`);
+      });
 
       setSchedules((prevSchedules) => {
         let shouldStartPlaying = false;
@@ -360,11 +381,11 @@ export default function MusicScheduler() {
           const shouldPlay = currentTimeStr >= schedule.startTime && currentTimeStr < schedule.stopTime;
 
           if (shouldPlay && !schedule.isPlaying && currentPlaylist.length > 0) {
-            console.log(`[Scheduler] Starting schedule: ${schedule.startTime} - ${schedule.stopTime}`);
+            console.log(`[Scheduler] TRIGGER START: ${schedule.startTime} - ${schedule.stopTime}`);
             shouldStartPlaying = true;
             return { ...schedule, isPlaying: true };
           } else if (!shouldPlay && schedule.isPlaying) {
-            console.log(`[Scheduler] Stopping schedule: ${schedule.startTime} - ${schedule.stopTime}`);
+            console.log(`[Scheduler] TRIGGER STOP: ${schedule.startTime} - ${schedule.stopTime}`);
             shouldStopPlaying = true;
             return { ...schedule, isPlaying: false };
           }
@@ -373,12 +394,14 @@ export default function MusicScheduler() {
 
         // Handle playback state changes outside of the map
         if (shouldStartPlaying) {
+          console.log('[Scheduler] Initiating playback sequence...');
           // Stop current playback first
           ytPlayerRef.current?.pauseVideo();
           audioRef.current?.pause();
 
           // Use setTimeout to avoid state update conflicts
           setTimeout(() => {
+            console.log('[Scheduler] Setting up shuffle and song index...');
             const freshShuffle = shuffleArray(currentPlaylist);
             setShuffledPlaylist(freshShuffle);
             setIsShuffleEnabled(true);
@@ -387,7 +410,7 @@ export default function MusicScheduler() {
             setDuration(0);
             // Give time for state to update before playing
             setTimeout(() => {
-              console.log('[Scheduler] Starting playback');
+              console.log('[Scheduler] Setting isPlaying to true');
               setIsPlaying(true);
             }, 200);
           }, 100);
@@ -406,15 +429,16 @@ export default function MusicScheduler() {
       });
     };
 
-    // Check every 30 seconds for more responsive scheduling
-    scheduleCheckIntervalRef.current = setInterval(checkSchedules, 30000);
-    // Initial check
-    checkSchedules();
+    // Check every 10 seconds for testing
+    scheduleCheckIntervalRef.current = setInterval(checkSchedules, 10000);
+
+    // Delay initial check to allow schedules to load from localStorage
+    setTimeout(checkSchedules, 1000);
 
     return () => {
       if (scheduleCheckIntervalRef.current) clearInterval(scheduleCheckIntervalRef.current);
     };
-  }, []); // No dependencies - uses refs instead
+  }, [schedules.length]); // Re-run when schedules are loaded
 
   // Update schedules without preview thumbnails when YouTube videos are added
   useEffect(() => {
@@ -755,6 +779,13 @@ export default function MusicScheduler() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const to12Hour = (time24: string) => {
+    const [h, m] = time24.split(':').map(Number);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const hour12 = h % 12 || 12;
+    return `${hour12}:${m.toString().padStart(2, '0')} ${period}`;
+  };
+
   const getScheduleStatus = (schedule: Schedule) => {
     if (schedule.isPlaying) return { label: 'LIVE', className: 'bg-[#00d68f] text-black' };
     const now = new Date();
@@ -1047,8 +1078,13 @@ export default function MusicScheduler() {
             {/* Schedules Section */}
             <div className="p-8">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-semibold text-white">Schedules</h2>
-                <span className="text-[#666] text-sm">{schedules.length} active</span>
+                <div className="flex items-center gap-4">
+                  <h2 className="text-xl font-semibold text-white">Schedules</h2>
+                  <span className="px-3 py-1 bg-[#0070f3] text-white text-sm font-mono rounded-lg">
+                    {currentTime}
+                  </span>
+                </div>
+                <span className="text-[#666] text-sm">{schedules.length} schedule{schedules.length !== 1 ? 's' : ''}</span>
               </div>
 
               {/* Create Schedule */}
@@ -1122,8 +1158,8 @@ export default function MusicScheduler() {
                           <>
                             <div className="flex items-start justify-between mb-4">
                               <div>
-                                <h4 className="text-white font-semibold text-lg">{schedule.startTime}</h4>
-                                <p className="text-[#666] text-sm">to {schedule.stopTime}</p>
+                                <h4 className="text-white font-semibold text-lg">{to12Hour(schedule.startTime)}</h4>
+                                <p className="text-[#666] text-sm">to {to12Hour(schedule.stopTime)}</p>
                               </div>
                               <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${status.className}`}>
                                 {status.label}
