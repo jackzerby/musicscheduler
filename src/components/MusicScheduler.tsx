@@ -20,7 +20,6 @@ import {
   X,
   Check,
   Home,
-  Repeat,
 } from 'lucide-react';
 
 // Types
@@ -32,13 +31,16 @@ interface Song {
   videoId?: string;
 }
 
-interface Schedule {
+interface TimeSlot {
   id: string;
   startTime: string;
   stopTime: string;
-  repeatDaily: boolean;
+}
+
+interface Schedule {
+  id: string;
+  timeSlots: TimeSlot[];
   isPlaying: boolean;
-  previewVideoId?: string; // Thumbnail preview for the schedule
 }
 
 interface YouTubePlayer {
@@ -87,6 +89,12 @@ declare global {
 
 const STORAGE_KEY = 'musicscheduler_playlist';
 const SCHEDULES_STORAGE_KEY = 'musicscheduler_schedules';
+const ACTIVE_SCHEDULE_KEY = 'musicscheduler_active_schedule';
+
+const DEFAULT_SCHEDULES: Schedule[] = [
+  { id: 'schedule-1', timeSlots: [{ id: 'slot-1a', startTime: '08:00', stopTime: '08:30' }], isPlaying: false },
+  { id: 'schedule-2', timeSlots: [{ id: 'slot-2a', startTime: '09:00', stopTime: '09:30' }], isPlaying: false },
+];
 
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
@@ -127,7 +135,8 @@ export default function MusicScheduler() {
   const [playlist, setPlaylist] = useState<Song[]>([]);
   const [shuffledPlaylist, setShuffledPlaylist] = useState<Song[]>([]);
   const [isShuffleEnabled, setIsShuffleEnabled] = useState(false);
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>(DEFAULT_SCHEDULES);
+  const [activeScheduleIndex, setActiveScheduleIndex] = useState<0 | 1>(0);
   const [currentSongIndex, setCurrentSongIndex] = useState<number>(-1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(70);
@@ -135,13 +144,12 @@ export default function MusicScheduler() {
   const [bulkUrls, setBulkUrls] = useState('');
   const [showBulkInput, setShowBulkInput] = useState(false);
   const [showAddMusic, setShowAddMusic] = useState(false);
-  const [newScheduleStart, setNewScheduleStart] = useState('08:00');
-  const [newScheduleStop, setNewScheduleStop] = useState('08:30');
-  const [newScheduleRepeat, setNewScheduleRepeat] = useState(true);
-  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
-  const [editScheduleStart, setEditScheduleStart] = useState('');
-  const [editScheduleStop, setEditScheduleStop] = useState('');
-  const [editScheduleRepeat, setEditScheduleRepeat] = useState(true);
+  const [editingSlot, setEditingSlot] = useState<{ scheduleId: string; slotId: string } | null>(null);
+  const [editSlotStart, setEditSlotStart] = useState('');
+  const [editSlotStop, setEditSlotStop] = useState('');
+  const [addingToScheduleId, setAddingToScheduleId] = useState<string | null>(null);
+  const [newSlotStart, setNewSlotStart] = useState('08:00');
+  const [newSlotStop, setNewSlotStop] = useState('08:30');
   const [ytApiReady, setYtApiReady] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -161,6 +169,7 @@ export default function MusicScheduler() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scheduleCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const playlistRef = useRef<Song[]>([]); // Keep current playlist in ref for schedule checker
+  const activeScheduleIndexRef = useRef<0 | 1>(0); // Keep active schedule index in ref for schedule checker
 
   const activePlaylist = isShuffleEnabled ? shuffledPlaylist : playlist;
   const currentSong = currentSongIndex >= 0 && currentSongIndex < activePlaylist.length
@@ -191,28 +200,43 @@ export default function MusicScheduler() {
     }
   }, [playlist]);
 
-  // Load schedules from localStorage
+  // Load schedules + active index from localStorage (migrates old startTime/stopTime format)
   useEffect(() => {
     const saved = localStorage.getItem(SCHEDULES_STORAGE_KEY);
     if (saved) {
       try {
-        const savedSchedules = JSON.parse(saved) as Schedule[];
-        // Reset isPlaying state on load
-        setSchedules(savedSchedules.map(s => ({ ...s, isPlaying: false })));
+        const savedSchedules = JSON.parse(saved) as any[];
+        const two: Schedule[] = [0, 1].map((i) => {
+          const s = savedSchedules[i];
+          if (!s) return DEFAULT_SCHEDULES[i];
+          // Migrate old single-slot format
+          if (s.startTime && !s.timeSlots) {
+            return { id: s.id || DEFAULT_SCHEDULES[i].id, timeSlots: [{ id: generateId(), startTime: s.startTime, stopTime: s.stopTime }], isPlaying: false };
+          }
+          return { ...DEFAULT_SCHEDULES[i], ...s, isPlaying: false };
+        });
+        setSchedules(two);
       } catch (e) {
         console.error('Failed to load schedules:', e);
       }
+    }
+    const savedIdx = localStorage.getItem(ACTIVE_SCHEDULE_KEY);
+    if (savedIdx === '1') {
+      setActiveScheduleIndex(1);
+      activeScheduleIndexRef.current = 1;
     }
   }, []);
 
   // Save schedules to localStorage whenever they change
   useEffect(() => {
-    if (schedules.length > 0) {
-      localStorage.setItem(SCHEDULES_STORAGE_KEY, JSON.stringify(schedules));
-    } else {
-      localStorage.removeItem(SCHEDULES_STORAGE_KEY);
-    }
+    localStorage.setItem(SCHEDULES_STORAGE_KEY, JSON.stringify(schedules));
   }, [schedules]);
+
+  // Sync activeScheduleIndex to ref and persist
+  useEffect(() => {
+    activeScheduleIndexRef.current = activeScheduleIndex;
+    localStorage.setItem(ACTIVE_SCHEDULE_KEY, String(activeScheduleIndex));
+  }, [activeScheduleIndex]);
 
   // Update current time display every second
   useEffect(() => {
@@ -359,66 +383,54 @@ export default function MusicScheduler() {
     return () => clearInterval(interval);
   }, [isPlaying, currentSong, isAdMuted, volume]);
 
-  // Schedule checker - runs every 10 seconds
+  // Schedule checker - runs every 10 seconds, only fires for the active schedule
   useEffect(() => {
     const checkSchedules = () => {
       const now = new Date();
       const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
       const currentPlaylist = playlistRef.current;
+      const activeIdx = activeScheduleIndexRef.current;
 
-      console.log(`[Scheduler] Checking at ${currentTimeStr}, ${currentPlaylist.length} songs, ${schedules.length} schedules`);
-
-      schedules.forEach((schedule, i) => {
-        const shouldPlay = currentTimeStr >= schedule.startTime && currentTimeStr < schedule.stopTime;
-        console.log(`[Scheduler] Schedule ${i}: ${schedule.startTime}-${schedule.stopTime}, shouldPlay=${shouldPlay}, isPlaying=${schedule.isPlaying}`);
-      });
+      console.log(`[Scheduler] Checking at ${currentTimeStr}, active: Schedule ${activeIdx + 1}`);
 
       setSchedules((prevSchedules) => {
         let shouldStartPlaying = false;
         let shouldStopPlaying = false;
 
-        const updatedSchedules = prevSchedules.map((schedule) => {
-          const shouldPlay = currentTimeStr >= schedule.startTime && currentTimeStr < schedule.stopTime;
+        const updatedSchedules = prevSchedules.map((schedule, idx) => {
+          const isActive = idx === activeIdx;
+          const shouldPlay = isActive && schedule.timeSlots.some(
+            (slot) => currentTimeStr >= slot.startTime && currentTimeStr < slot.stopTime
+          );
 
           if (shouldPlay && !schedule.isPlaying && currentPlaylist.length > 0) {
-            console.log(`[Scheduler] TRIGGER START: ${schedule.startTime} - ${schedule.stopTime}`);
+            console.log(`[Scheduler] TRIGGER START: Schedule ${idx + 1}`);
             shouldStartPlaying = true;
             return { ...schedule, isPlaying: true };
-          } else if (!shouldPlay && schedule.isPlaying) {
-            console.log(`[Scheduler] TRIGGER STOP: ${schedule.startTime} - ${schedule.stopTime}`);
+          } else if (schedule.isPlaying && (!isActive || !shouldPlay)) {
+            console.log(`[Scheduler] TRIGGER STOP: Schedule ${idx + 1}`);
             shouldStopPlaying = true;
             return { ...schedule, isPlaying: false };
           }
           return schedule;
         });
 
-        // Handle playback state changes outside of the map
         if (shouldStartPlaying) {
-          console.log('[Scheduler] Initiating playback sequence...');
-          // Stop current playback first
           ytPlayerRef.current?.pauseVideo();
           audioRef.current?.pause();
-
-          // Use setTimeout to avoid state update conflicts
           setTimeout(() => {
-            console.log('[Scheduler] Setting up shuffle and song index...');
             const freshShuffle = shuffleArray(currentPlaylist);
             setShuffledPlaylist(freshShuffle);
             setIsShuffleEnabled(true);
             setCurrentSongIndex(0);
             setProgress(0);
             setDuration(0);
-            // Give time for state to update before playing
-            setTimeout(() => {
-              console.log('[Scheduler] Setting isPlaying to true');
-              setIsPlaying(true);
-            }, 200);
+            setTimeout(() => setIsPlaying(true), 200);
           }, 100);
         }
 
         if (shouldStopPlaying) {
           setTimeout(() => {
-            console.log('[Scheduler] Stopping playback');
             setIsPlaying(false);
             ytPlayerRef.current?.pauseVideo();
             audioRef.current?.pause();
@@ -429,30 +441,13 @@ export default function MusicScheduler() {
       });
     };
 
-    // Check every 10 seconds for testing
     scheduleCheckIntervalRef.current = setInterval(checkSchedules, 10000);
-
-    // Delay initial check to allow schedules to load from localStorage
     setTimeout(checkSchedules, 1000);
 
     return () => {
       if (scheduleCheckIntervalRef.current) clearInterval(scheduleCheckIntervalRef.current);
     };
-  }, [schedules.length]); // Re-run when schedules are loaded
-
-  // Update schedules without preview thumbnails when YouTube videos are added
-  useEffect(() => {
-    const youtubeVideos = playlist.filter(s => s.type === 'youtube' && s.videoId);
-    if (youtubeVideos.length === 0) return;
-
-    setSchedules(prev => prev.map(schedule => {
-      if (!schedule.previewVideoId) {
-        const randomVideo = youtubeVideos[Math.floor(Math.random() * youtubeVideos.length)];
-        return { ...schedule, previewVideoId: randomVideo.videoId };
-      }
-      return schedule;
-    }));
-  }, [playlist]);
+  }, []); // Runs once; uses refs for live values
 
   // Play current song
   useEffect(() => {
@@ -676,94 +671,49 @@ export default function MusicScheduler() {
     }
   };
 
-  const addSchedule = () => {
-    if (newScheduleStart >= newScheduleStop) {
-      alert('Stop time must be after start time');
-      return;
-    }
-
-    // Pick a random YouTube video for the preview thumbnail
-    const youtubeVideos = playlist.filter(s => s.type === 'youtube' && s.videoId);
-    const randomVideo = youtubeVideos.length > 0
-      ? youtubeVideos[Math.floor(Math.random() * youtubeVideos.length)]
-      : null;
-
-    setSchedules((prev) => [...prev, {
-      id: generateId(),
-      startTime: newScheduleStart,
-      stopTime: newScheduleStop,
-      repeatDaily: newScheduleRepeat,
-      isPlaying: false,
-      previewVideoId: randomVideo?.videoId,
-    }]);
-    setNewScheduleStart('08:00');
-    setNewScheduleStop('08:30');
-    setNewScheduleRepeat(true);
+  // Slot CRUD
+  const startEditSlot = (scheduleId: string, slot: TimeSlot) => {
+    setEditingSlot({ scheduleId, slotId: slot.id });
+    setEditSlotStart(slot.startTime);
+    setEditSlotStop(slot.stopTime);
+    setAddingToScheduleId(null);
   };
 
-  const startEditSchedule = (schedule: Schedule) => {
-    setEditingScheduleId(schedule.id);
-    setEditScheduleStart(schedule.startTime);
-    setEditScheduleStop(schedule.stopTime);
-    setEditScheduleRepeat(schedule.repeatDaily);
-  };
-
-  const saveEditSchedule = () => {
-    if (editScheduleStart >= editScheduleStop) {
-      alert('Stop time must be after start time');
-      return;
-    }
+  const saveEditSlot = () => {
+    if (!editingSlot) return;
+    if (editSlotStart >= editSlotStop) { alert('Stop time must be after start time'); return; }
     setSchedules((prev) => prev.map((s) =>
-      s.id === editingScheduleId ? { ...s, startTime: editScheduleStart, stopTime: editScheduleStop, repeatDaily: editScheduleRepeat } : s
+      s.id === editingSlot.scheduleId
+        ? { ...s, timeSlots: s.timeSlots.map((slot) =>
+            slot.id === editingSlot.slotId ? { ...slot, startTime: editSlotStart, stopTime: editSlotStop } : slot
+          )}
+        : s
     ));
-    setEditingScheduleId(null);
+    setEditingSlot(null);
   };
 
-  const deleteSchedule = (scheduleId: string) => {
-    const schedule = schedules.find((s) => s.id === scheduleId);
-    if (schedule?.isPlaying) {
-      setIsPlaying(false);
-      ytPlayerRef.current?.pauseVideo();
-      audioRef.current?.pause();
-    }
-    setSchedules((prev) => prev.filter((s) => s.id !== scheduleId));
+  const deleteSlot = (scheduleId: string, slotId: string) => {
+    setSchedules((prev) => prev.map((s) =>
+      s.id === scheduleId ? { ...s, timeSlots: s.timeSlots.filter((slot) => slot.id !== slotId) } : s
+    ));
   };
 
-  const testSchedule = (scheduleId: string) => {
-    if (playlist.length === 0) {
-      alert('No songs in playlist');
-      return;
-    }
-
-    // Stop current playback first
-    ytPlayerRef.current?.pauseVideo();
-    audioRef.current?.pause();
-    setIsPlaying(false);
-
-    // Reset progress
-    setProgress(0);
-    setDuration(0);
-
-    // Mark this schedule as playing
-    setSchedules((prev) => prev.map((s) => ({ ...s, isPlaying: s.id === scheduleId })));
-
-    // Create fresh shuffle and start from beginning
-    const freshShuffle = shuffleArray(playlist);
-    setShuffledPlaylist(freshShuffle);
-    setIsShuffleEnabled(true);
-    setCurrentSongIndex(0);
-
-    // Small delay to ensure state updates, then play
-    setTimeout(() => {
-      setIsPlaying(true);
-    }, 100);
+  const startAddSlot = (scheduleId: string) => {
+    setAddingToScheduleId(scheduleId);
+    setNewSlotStart('08:00');
+    setNewSlotStop('08:30');
+    setEditingSlot(null);
   };
 
-  const stopScheduleTest = (scheduleId: string) => {
-    setSchedules((prev) => prev.map((s) => (s.id === scheduleId ? { ...s, isPlaying: false } : s)));
-    setIsPlaying(false);
-    ytPlayerRef.current?.pauseVideo();
-    audioRef.current?.pause();
+  const saveNewSlot = () => {
+    if (!addingToScheduleId) return;
+    if (newSlotStart >= newSlotStop) { alert('Stop time must be after start time'); return; }
+    setSchedules((prev) => prev.map((s) =>
+      s.id === addingToScheduleId
+        ? { ...s, timeSlots: [...s.timeSlots, { id: generateId(), startTime: newSlotStart, stopTime: newSlotStop }] }
+        : s
+    ));
+    setAddingToScheduleId(null);
   };
 
   const getVolumeIcon = () => {
@@ -785,24 +735,6 @@ export default function MusicScheduler() {
     const hour12 = h % 12 || 12;
     return `${hour12}:${m.toString().padStart(2, '0')} ${period}`;
   };
-
-  const getScheduleStatus = (schedule: Schedule) => {
-    if (schedule.isPlaying) return { label: 'LIVE', className: 'bg-[#00d68f] text-black' };
-    const now = new Date();
-    const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    if (currentTimeStr < schedule.startTime) return { label: 'SCHEDULED', className: 'bg-[#0070f3] text-white' };
-    return { label: 'INACTIVE', className: 'bg-[#333] text-[#888]' };
-  };
-
-  // Get current playing song's thumbnail (for schedule cards)
-  const getCurrentSongThumbnail = () => {
-    if (currentSong?.type === 'youtube' && currentSong.videoId) {
-      return `https://img.youtube.com/vi/${currentSong.videoId}/mqdefault.jpg`;
-    }
-    return null;
-  };
-
-  const currentSongThumbnail = getCurrentSongThumbnail();
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!audioRef.current || !duration) return;
@@ -1084,120 +1016,138 @@ export default function MusicScheduler() {
                     {currentTime}
                   </span>
                 </div>
-                <span className="text-[#666] text-sm">{schedules.length} schedule{schedules.length !== 1 ? 's' : ''}</span>
               </div>
 
-              {/* Create Schedule */}
-              <div className="vercel-card p-6 mb-6">
-                <div className="flex flex-wrap items-end gap-4">
-                  <div>
-                    <label className="text-[#666] text-xs uppercase tracking-wider block mb-2">Start</label>
-                    <input
-                      type="time"
-                      value={newScheduleStart}
-                      onChange={(e) => setNewScheduleStart(e.target.value)}
-                      className="px-4 py-2.5 bg-[#111] border border-[#262626] text-white rounded-lg focus:outline-none focus:border-[#0070f3] transition-colors"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[#666] text-xs uppercase tracking-wider block mb-2">End</label>
-                    <input
-                      type="time"
-                      value={newScheduleStop}
-                      onChange={(e) => setNewScheduleStop(e.target.value)}
-                      className="px-4 py-2.5 bg-[#111] border border-[#262626] text-white rounded-lg focus:outline-none focus:border-[#0070f3] transition-colors"
-                    />
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer py-2.5">
-                    <input
-                      type="checkbox"
-                      checked={newScheduleRepeat}
-                      onChange={(e) => setNewScheduleRepeat(e.target.checked)}
-                      className="w-4 h-4 rounded bg-[#111] border-[#262626] text-[#0070f3] focus:ring-[#0070f3]"
-                    />
-                    <span className="text-[#888] text-sm">Repeat daily</span>
-                  </label>
-                  <button
-                    onClick={addSchedule}
-                    className="px-6 py-2.5 bg-white hover:bg-[#e5e5e5] text-black font-medium text-sm rounded-lg transition-colors"
-                  >
-                    Create Schedule
-                  </button>
-                </div>
-              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {schedules.map((schedule, idx) => {
+                  const isActive = idx === activeScheduleIndex;
+                  const isAddingHere = addingToScheduleId === schedule.id;
 
-              {/* Schedule Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {schedules.length === 0 ? (
-                  <div className="col-span-full text-center py-16 vercel-card">
-                    <Clock className="w-10 h-10 text-[#333] mx-auto mb-4" />
-                    <p className="text-[#666]">No schedules created</p>
-                    <p className="text-[#444] text-sm mt-1">Create one above to get started</p>
-                  </div>
-                ) : (
-                  schedules.map((schedule) => {
-                    const status = getScheduleStatus(schedule);
-                    const isEditing = editingScheduleId === schedule.id;
-
-                    return (
-                      <div key={schedule.id} className="vercel-card p-5 group relative">
-                        {isEditing ? (
-                          <div className="space-y-3">
-                            <input type="time" value={editScheduleStart} onChange={(e) => setEditScheduleStart(e.target.value)} className="w-full px-3 py-2 bg-[#111] border border-[#262626] text-white rounded-lg" />
-                            <input type="time" value={editScheduleStop} onChange={(e) => setEditScheduleStop(e.target.value)} className="w-full px-3 py-2 bg-[#111] border border-[#262626] text-white rounded-lg" />
-                            <label className="flex items-center gap-2">
-                              <input type="checkbox" checked={editScheduleRepeat} onChange={(e) => setEditScheduleRepeat(e.target.checked)} className="w-4 h-4 rounded" />
-                              <span className="text-[#888] text-sm">Repeat</span>
-                            </label>
-                            <div className="flex gap-2">
-                              <button onClick={saveEditSchedule} className="flex-1 py-2.5 bg-white text-black rounded-lg hover:bg-[#e5e5e5] transition-colors"><Check className="w-4 h-4 mx-auto" /></button>
-                              <button onClick={() => setEditingScheduleId(null)} className="flex-1 py-2.5 bg-[#262626] text-white rounded-lg hover:bg-[#333] transition-colors"><X className="w-4 h-4 mx-auto" /></button>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <div className="flex items-start justify-between mb-4">
-                              <div>
-                                <h4 className="text-white font-semibold text-lg">{to12Hour(schedule.startTime)}</h4>
-                                <p className="text-[#666] text-sm">to {to12Hour(schedule.stopTime)}</p>
-                              </div>
-                              <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${status.className}`}>
-                                {status.label}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-2 text-[#666] text-sm mb-4">
-                              <Music className="w-4 h-4" />
-                              <span>{playlist.length} tracks</span>
-                              {schedule.repeatDaily && (
-                                <>
-                                  <span className="text-[#333]">•</span>
-                                  <Repeat className="w-3 h-3" />
-                                  <span>Daily</span>
-                                </>
-                              )}
-                            </div>
-
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => startEditSchedule(schedule)}
-                                className="flex-1 py-2.5 bg-[#1a1a1a] border border-[#262626] hover:border-[#404040] rounded-lg flex items-center justify-center transition-colors"
-                              >
-                                <Edit2 className="w-4 h-4 text-[#888]" />
-                              </button>
-                              <button
-                                onClick={() => deleteSchedule(schedule.id)}
-                                className="flex-1 py-2.5 bg-[#1a1a1a] border border-[#262626] hover:border-[#f31260] rounded-lg flex items-center justify-center transition-colors group/del"
-                              >
-                                <Trash2 className="w-4 h-4 text-[#888] group-hover/del:text-[#f31260]" />
-                              </button>
-                            </div>
-                          </>
+                  return (
+                    <div
+                      key={schedule.id}
+                      className={`vercel-card p-5 transition-all ${
+                        isActive ? 'ring-2 ring-[#0070f3] ring-offset-2 ring-offset-[#0a0a0a]' : ''
+                      }`}
+                    >
+                      {/* Header */}
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[#666] text-xs uppercase tracking-wider font-medium">
+                            Schedule {idx + 1}
+                          </span>
+                          {isActive && (
+                            <span className="px-2 py-0.5 bg-[#0070f3] text-white text-xs font-medium rounded-full">
+                              ACTIVE
+                            </span>
+                          )}
+                          {schedule.isPlaying && (
+                            <span className="px-2 py-0.5 bg-[#00d68f] text-black text-xs font-medium rounded-full">
+                              LIVE
+                            </span>
+                          )}
+                        </div>
+                        {!isActive && (
+                          <button
+                            onClick={() => setActiveScheduleIndex(idx as 0 | 1)}
+                            className="px-3 py-1 bg-[#0070f3] hover:bg-[#005fd4] rounded-full text-white text-xs font-medium transition-colors"
+                          >
+                            Use This
+                          </button>
                         )}
                       </div>
-                    );
-                  })
-                )}
+
+                      {/* Time slots list */}
+                      <div className="space-y-2 mb-3">
+                        {schedule.timeSlots.length === 0 && (
+                          <p className="text-[#444] text-sm text-center py-2">No time slots</p>
+                        )}
+                        {schedule.timeSlots.map((slot) => {
+                          const isEditingSlot = editingSlot?.scheduleId === schedule.id && editingSlot?.slotId === slot.id;
+                          if (isEditingSlot) {
+                            return (
+                              <div key={slot.id} className="p-3 bg-[#111] border border-[#262626] rounded-lg space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="time"
+                                    value={editSlotStart}
+                                    onChange={(e) => setEditSlotStart(e.target.value)}
+                                    className="flex-1 px-2 py-1.5 bg-[#0a0a0a] border border-[#262626] text-white text-sm rounded-lg focus:outline-none focus:border-[#0070f3]"
+                                  />
+                                  <span className="text-[#666] text-xs">to</span>
+                                  <input
+                                    type="time"
+                                    value={editSlotStop}
+                                    onChange={(e) => setEditSlotStop(e.target.value)}
+                                    className="flex-1 px-2 py-1.5 bg-[#0a0a0a] border border-[#262626] text-white text-sm rounded-lg focus:outline-none focus:border-[#0070f3]"
+                                  />
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={saveEditSlot} className="flex-1 py-1.5 bg-white text-black text-sm rounded-lg hover:bg-[#e5e5e5] transition-colors">Save</button>
+                                  <button onClick={() => setEditingSlot(null)} className="flex-1 py-1.5 bg-[#262626] text-white text-sm rounded-lg hover:bg-[#333] transition-colors">Cancel</button>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={slot.id} className="group flex items-center justify-between px-3 py-2.5 bg-[#111] border border-[#262626] rounded-lg">
+                              <span className="text-white text-sm font-medium">
+                                {to12Hour(slot.startTime)} – {to12Hour(slot.stopTime)}
+                              </span>
+                              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  onClick={() => startEditSlot(schedule.id, slot)}
+                                  className="p-1.5 text-[#666] hover:text-white transition-colors rounded"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => deleteSlot(schedule.id, slot.id)}
+                                  className="p-1.5 text-[#666] hover:text-[#f31260] transition-colors rounded"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Add slot form or button */}
+                      {isAddingHere ? (
+                        <div className="p-3 bg-[#111] border border-[#262626] rounded-lg space-y-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="time"
+                              value={newSlotStart}
+                              onChange={(e) => setNewSlotStart(e.target.value)}
+                              className="flex-1 px-2 py-1.5 bg-[#0a0a0a] border border-[#262626] text-white text-sm rounded-lg focus:outline-none focus:border-[#0070f3]"
+                            />
+                            <span className="text-[#666] text-xs">to</span>
+                            <input
+                              type="time"
+                              value={newSlotStop}
+                              onChange={(e) => setNewSlotStop(e.target.value)}
+                              className="flex-1 px-2 py-1.5 bg-[#0a0a0a] border border-[#262626] text-white text-sm rounded-lg focus:outline-none focus:border-[#0070f3]"
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={saveNewSlot} className="flex-1 py-1.5 bg-white text-black text-sm rounded-lg hover:bg-[#e5e5e5] transition-colors">Add</button>
+                            <button onClick={() => setAddingToScheduleId(null)} className="flex-1 py-1.5 bg-[#262626] text-white text-sm rounded-lg hover:bg-[#333] transition-colors">Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => startAddSlot(schedule.id)}
+                          className="w-full py-2 border border-dashed border-[#262626] hover:border-[#404040] text-[#666] hover:text-white text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add time slot
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
